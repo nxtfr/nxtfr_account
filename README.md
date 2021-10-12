@@ -1,2 +1,9 @@
-# nxtfr_account
-Nextgen Framework Account System
+nxtfr_account
+=====
+
+An OTP application
+
+Build
+-----
+
+    $ rebar3 compile
