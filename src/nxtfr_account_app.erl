@@ -4,7 +4,7 @@
 %%%-------------------------------------------------------------------
 
 -module(nxtfr_account_app).
-
+-author("christian@flodihn.se").
 -behaviour(application).
 
 -export([start/2, stop/1]).

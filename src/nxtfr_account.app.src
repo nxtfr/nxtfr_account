@@ -7,7 +7,10 @@
    [kernel,
     stdlib
    ]},
-  {env,[]},
+  {env,[
+      {storage_module, nxtfr_account_mnesia},
+      {crypto_module, nxtfr_account_bcrypt}
+  ]},
   {modules, []},
 
   {licenses, ["Apache 2.0"]},
