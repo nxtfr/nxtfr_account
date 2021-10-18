@@ -160,27 +160,37 @@ handle_call({update, Account}, _From, #state{storage_module = StorageModule} = S
     end;
 
 handle_call({update_email_by_email, OldEmail, NewEmail}, _From, #state{storage_module = StorageModule} = State) ->
-    case get_account_by_email(OldEmail, State) of
-        {ok, Account} ->
-            UpdatedAccount = Account#account{
-                email = NewEmail,
-                updated_at = get_rfc3339_time()},
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-            {reply, {ok, updated}, State};
-        not_found ->
-            {reply, {error, not_found}, State}
+    case email_exists(NewEmail, State) of
+        true ->
+            {reply, {error, email_already_exists}, State};
+        false ->
+            case get_account_by_email(OldEmail, State) of
+                {ok, Account} ->
+                    UpdatedAccount = Account#account{
+                        email = NewEmail,
+                        updated_at = get_rfc3339_time()},
+                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, updated}, State};
+                not_found ->
+                    {reply, {error, not_found}, State}
+            end
     end;
 
 handle_call({update_email_by_uid, Uid, NewEmail}, _From, #state{storage_module = StorageModule} = State) ->
-    case get_account_by_uid(Uid, State) of
-        {ok, Account} ->
-            UpdatedAccount = Account#account{
-                email = NewEmail,
-                updated_at = get_rfc3339_time()},
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-            {reply, {ok, updated}, State};
-        not_found ->
-            {reply, {error, not_found}, State}
+    case email_exists(NewEmail, State) of
+        true ->
+            {reply, {error, email_already_exists}, State};
+        false ->
+            case get_account_by_uid(Uid, State) of
+                {ok, Account} ->
+                    UpdatedAccount = Account#account{
+                        email = NewEmail,
+                        updated_at = get_rfc3339_time()},
+                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, updated}, State};
+                not_found ->
+                    {reply, {error, not_found}, State}
+            end
     end;
 
 handle_call(
@@ -360,4 +370,10 @@ get_account_by_uid(Uid, include_logically_deleted, #state{storage_module = Stora
             {ok, Account};
         not_found ->
             not_found
+    end.
+
+email_exists(Email, #state{storage_module = StorageModule} = State) ->
+    case StorageModule:load_by_email(Email, State#state.storage_state) of
+        {ok, _Account} -> true;
+        not_found -> false
     end.

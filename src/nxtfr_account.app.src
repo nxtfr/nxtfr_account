@@ -8,7 +8,7 @@
     stdlib
    ]},
   {env,[
-      {storage_module, nxtfr_account_mnesia},
+      {storage_module, nxtfr_account_riak},
       {crypto_module, nxtfr_account_bcrypt}
   ]},
   {modules, []},

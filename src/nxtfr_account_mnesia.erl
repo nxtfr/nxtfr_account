@@ -3,7 +3,6 @@
 
 -include_lib("stdlib/include/qlc.hrl").
 -include("nxtfr_account.hrl").
-
 -define(ACCOUNTS_TABLE, accounts).
 
 -export([

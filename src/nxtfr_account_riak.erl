@@ -1,56 +1,65 @@
 -module(nxtfr_account_riak).
+-author("christian@flodihn.se").
+
+-define(ACCOUNTS_TABLE, <<"accounts">>).
+-include("nxtfr_account.hrl").
+-record(riak_state, {riak_client_pid}).
 
 -export([
     init/0,
     stop/1,
     save/2,
-    load/2,
-    lookup_email/2,
-    delete/2
+    load_by_email/2,
+    load_by_uid/2,
+    delete/2,
+    logical_delete/2
     ]).
-
--record(riak_state, {riak_client_pid}).
-
--include("nxtfr_account.hrl").
 
 init() ->
     {ok, Pid} = riakc_pb_socket:start("127.0.0.1", 8087),
+    error_logger:info_report({?MODULE, riak_connection_successful, "127.0.0.1", 8087}),
     {ok, #riak_state{riak_client_pid = Pid}}.
 
 stop(#riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:stop(Pid),
     error_logger:info_report("Database Stopped").
     
-save(#account{uid=Uid, email=Email} = AccountData, RiakState) ->
-    NewAccount = riakc_obj:new(<<"accounts">>, Uid, term_to_binary(AccountData)),
+save(#account{uid=Uid, email=Email} = AccountData, #riak_state{riak_client_pid = Pid}) ->
+    NewAccount = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(AccountData)),
     AccountMetaData = riakc_obj:get_update_metadata(NewAccount),
-    AccountMetaData2 = riakc_obj:set_secondary_index(
-        AccountMetaData,
-        [{{integer_index, "email"}, [Email]}]),
+    AccountMetaData2 = riakc_obj:set_secondary_index(AccountMetaData, [{{binary_index, "email"}, [Email]}]),
     NewAccountWithIndex = riakc_obj:update_metadata(NewAccount, AccountMetaData2),
-    riakc_pb_socket:put(
-        RiakState#riak_state.riak_client_pid,
-        NewAccountWithIndex, 
-        [{w, 1}, {dw, 1}, return_body]),
+    riakc_pb_socket:put(Pid, NewAccountWithIndex, [{w, 1}, {dw, 1}, return_body]),
     {ok, saved}.
 
-load(Uid, RiakState) ->
-    FetchedObj = riakc_pb_socket:get(
-        RiakState#riak_state.riak_client_pid, <<"accounts">>, Uid),
-    read_value(FetchedObj).
+load_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
+    FetchedObj = riakc_pb_socket:get(Pid, ?ACCOUNTS_TABLE, Uid),
+    {ok, read_value(FetchedObj)}.
 
-lookup_email(Email, RiakState) ->
-    FetchedObj = riakc_pb_socket:get(
-        RiakState#riak_state.riak_client_pid, <<"accounts">>, Email),
+load_by_email(Email, #riak_state{riak_client_pid = Pid} = RiakState) ->
+    FetchedObj = riakc_pb_socket:get_index(Pid, ?ACCOUNTS_TABLE, {binary_index, "email"}, Email),
     case FetchedObj of
-        {error, notfound} -> not_found;
-        _ -> {ok, read_value(FetchedObj)}
+        {error, notfound} ->
+            not_found;
+        {ok, {index_results_v1, [], _, _}} ->
+            not_found;
+        {ok, {index_results_v1, [Uid], _, _}} ->
+            load_by_uid(Uid, RiakState)
     end.
 
-delete(Uid, RiakState) ->
-    riakc_pb_socket:delete(
-        RiakState#riak_state.riak_client_pid, <<"accounts">>, Uid),
-    {ok, account_deleted}.
+delete(Uid, #riak_state{riak_client_pid = Pid}) ->
+    riakc_pb_socket:delete(Pid, ?ACCOUNTS_TABLE, Uid),
+    {ok, deleted}.
+
+logical_delete(Uid, RiakState) ->
+    case load_by_uid(Uid, RiakState) of
+        {ok, Account} ->
+            DeletedAccount = Account#account{deleted = true},
+            {ok, saved} = save(DeletedAccount, RiakState),
+            {ok, deleted};
+        {error, not_found} ->
+            not_found
+    end.
 
 read_value(FetchedObj)->
     case FetchedObj of
