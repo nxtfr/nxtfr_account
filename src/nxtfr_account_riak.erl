@@ -16,8 +16,11 @@
     ]).
 
 init() ->
-    {ok, Pid} = riakc_pb_socket:start("127.0.0.1", 8087),
-    error_logger:info_report({?MODULE, riak_connection_successful, "127.0.0.1", 8087}),
+    {ok, RiakOptions} = application:get_env(nxtfr_account, riak_options),
+    Hostname = proplists:get_value(hostname, RiakOptions, "127.0.0.1"),
+    Port = proplists:get_value(port, RiakOptions, 8087),
+    {ok, Pid} = riakc_pb_socket:start(Hostname, Port),
+    error_logger:info_report({?MODULE, riak_connection_successful, Hostname, Port}),
     {ok, #riak_state{riak_client_pid = Pid}}.
 
 stop(#riak_state{riak_client_pid = Pid}) ->

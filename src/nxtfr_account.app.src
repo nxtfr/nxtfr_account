@@ -9,7 +9,8 @@
    ]},
   {env,[
       {storage_module, nxtfr_account_riak},
-      {crypto_module, nxtfr_account_bcrypt}
+      {crypto_module, nxtfr_account_bcrypt},
+      {riak_options, [{host, "127.0.0.1"}, {port, 8087}]}
   ]},
   {modules, []},
 
