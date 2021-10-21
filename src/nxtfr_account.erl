@@ -98,7 +98,7 @@ delete_by_uid(Uid, logical_delete) ->
 
 init([]) ->
     application:start(nxtfr_event),
-    nxtfr_event:add_global_handler(nxtr_account, nxtfr_account_event_handler),
+    nxtfr_event:add_global_handler(nxtfr_account, nxtfr_account_event_handler),
     {ok, StorageModule} = application:get_env(nxtfr_account, storage_module),
     {ok, CryptoModule} = application:get_env(nxtfr_account, crypto_module),
     {ok, StorageState} = StorageModule:init(),

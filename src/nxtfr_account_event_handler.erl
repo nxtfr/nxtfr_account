@@ -8,8 +8,8 @@ init([]) ->
     {ok, []}.
  
 handle_event({register, {email, Email}, {password, Password}, {extra, Extra}}, State) ->
-    io:format("AccountSystem: Received register ~p.~n", [Email]),
-    nxtfr_account:create(Email, Password, Extra)
+    error_logger:info_report({"AccountSystem: Received register", Email}),
+    nxtfr_account:create(Email, Password, Extra),
     {ok, State};
 
 handle_event(_, State) ->
