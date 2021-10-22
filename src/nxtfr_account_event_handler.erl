@@ -12,7 +12,8 @@ handle_event({register, {email, Email}, {password, Password}, {extra, Extra}}, S
     nxtfr_account:create(Email, Password, Extra),
     {ok, State};
 
-handle_event(_, State) ->
+handle_event(Event, State) ->
+    error_logger:info_report({?MODULE, unknown_event, Event}),
     {ok, State}.
  
 handle_call(_, State) ->
