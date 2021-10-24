@@ -3,17 +3,24 @@
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {nxtfr_account_app, []}},
-  {applications,
-   [kernel,
+  {applications, [
+    kernel,
     stdlib
-   ]},
-  {env,[
-      {storage_module, nxtfr_account_riak},
-      {crypto_module, nxtfr_account_bcrypt},
-      {riak_options, [{host, "127.0.0.1"}, {port, 8087}]}
   ]},
-  {modules, []},
-
-  {licenses, ["Apache 2.0"]},
+  {env,[
+    {storage_module, nxtfr_account_riak},
+    {crypto_module, nxtfr_account_bcrypt},
+    {riak_options, [{host, "127.0.0.1"}, {port, 8087}]}
+  ]},
+  {modules, [
+    nxtfr_account,
+    nxtfr_account_app,
+    nxtfr_account_sup,
+    nxtfr_account_bcrypt,
+    nxtfr_account_mnesia,
+    nxtfr_account_riak,
+    nxtfr_account_event_handler
+  ]},
+  {licenses, ["MIT License"]},
   {links, []}
  ]}.

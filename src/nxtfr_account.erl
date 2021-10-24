@@ -33,7 +33,7 @@
     init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2
     ]).
 
-% server state
+%% server state
 -record(state, {storage_module, crypto_module, storage_state, crypto_state}).
 
 start_link() ->
@@ -307,7 +307,7 @@ handle_cast(Cast, State) ->
 
 handle_info(Info, State) ->
     error_logger:error_report([{undefined_info, Info}]),
-    {nopreply, State}.
+    {noreply, State}.
 
 code_change(_OldVsn, State, _Extra) ->
     {ok, State}.
