@@ -101,6 +101,8 @@ init([]) ->
     nxtfr_event:add_global_handler(nxtfr_account, nxtfr_account_event_handler),
     {ok, StorageModule} = application:get_env(nxtfr_account, storage_module),
     {ok, CryptoModule} = application:get_env(nxtfr_account, crypto_module),
+    {ok, AutoDiscoveryGroup} = application:get_env(nxtfr_account, autodiscovery_group),
+    nxtfr_event:notify({join_autodiscovery_group, AutoDiscoveryGroup}),
     {ok, StorageState} = StorageModule:init(),
     {ok, CryptoState} = CryptoModule:init(),
     {ok, #state{
