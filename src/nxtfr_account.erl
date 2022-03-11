@@ -10,6 +10,7 @@
     create/2,
     create/3,
     read/1,
+    read/2,
     add_avatar/2,
     remove_avatar/2,
     add_friend/2,
@@ -21,7 +22,8 @@
     update_extra/2,
     validate/2,
     delete/1,
-    delete/2
+    delete/2,
+    restore/1
     ]).
 
 %% gen_server callbacks
@@ -46,6 +48,10 @@ create(Email, Password, Extra) ->
 -spec read(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Account :: map() | {error, account_not_found}}.
 read(EmailOrUid) ->
     gen_server:call(?MODULE, {read, EmailOrUid}).
+
+-spec read(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, include_logically_deleted) -> {ok, Account :: map() | {error, account_not_found}}.
+read(EmailOrUid, include_logically_deleted) ->
+    gen_server:call(?MODULE, {read, EmailOrUid, include_logically_deleted}).
 
 -spec add_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_added} | {error, account_not_found}.
 add_avatar(EmailOrUid, AvatarUid) ->
@@ -94,6 +100,10 @@ delete(EmailOrUid) ->
 -spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, logical_delete) -> {ok, account_deleted} | {error, account_not_found}.
 delete(EmailOrUid, logical_delete) ->
     gen_server:call(?MODULE, {delete, EmailOrUid, logical_delete}).
+
+-spec restore(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_restored} | {error, account_not_found}.
+restore(EmailOrUid) ->
+    gen_server:call(?MODULE, {restore, EmailOrUid}).
 
 init([]) ->
     application:start(nxtfr_event),
@@ -204,6 +214,14 @@ handle_call({read, EmailOrUid}, _From, State) ->
             {reply, {error, account_not_found}, State}
     end;
 
+handle_call({read, EmailOrUid, include_logically_deleted}, _From, State) ->
+    case get_account(EmailOrUid, include_logically_deleted, State) of
+        {ok, Account} ->
+            {reply, {ok, account_to_map(Account)}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
 handle_call({lookup, EmailOrUid}, _From, State) ->
     case get_account(EmailOrUid, State) of
         {ok, Account} ->
@@ -215,7 +233,7 @@ handle_call({lookup, EmailOrUid}, _From, State) ->
 handle_call({lookup, EmailOrUid, include_logically_deleted}, _From, State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, Account} ->
-            {reply, {ok, Account}, State};
+            {reply, {ok, Account#account.uid}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
@@ -296,6 +314,22 @@ handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module =
             {reply, {error, account_not_found}, State}
     end;
 
+handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, include_logically_deleted, State) of
+        {ok, #account{deleted = true} = Account} ->
+            UpdatedAccount = Account#account{
+                deleted = false,
+                updated_at = get_rfc3339_time()
+            },
+            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+            {reply, {ok, account_restored}, State};
+        {ok, #account{deleted = false}} ->
+            {reply, {ok, account_not_deleted}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
+
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
     {reply, ok, State}.
@@ -356,17 +390,12 @@ read_account_from_storage(EmailOrUid, #state{storage_module = StorageModule, sto
     case EmailOrUid of
         {email, Email} ->
             case StorageModule:load_by_email(Email, StorageState) of
-                {ok, Account} -> 
-                    {ok, Account};
-                not_found ->
-                    not_found
+                {ok, Account} -> {ok, Account};
+                not_found -> not_found
             end;
         {uid, Uid} ->
             case StorageModule:load_by_uid(Uid, StorageState) of
-                {ok, #account{deleted = false} = Account} -> 
-                    {ok, Account};
-                {ok, #account{deleted = true}} -> 
-                    not_found;
+                {ok, Account} -> {ok, Account};
                 not_found -> not_found
             end
     end.
