@@ -37,7 +37,13 @@ save(#account{uid=Uid, email=Email} = AccountData, #riak_state{riak_client_pid =
 
 load_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
     FetchedObj = riakc_pb_socket:get(Pid, ?ACCOUNTS_TABLE, Uid),
-    {ok, read_value(FetchedObj)}.
+    case FetchedObj of
+        {error, notfound}->
+            not_found;
+        _ ->
+            {_, Value} = FetchedObj,
+            {ok, binary_to_term(riakc_obj:get_value(Value))}    
+    end.
 
 load_by_email(Email, #riak_state{riak_client_pid = Pid} = RiakState) ->
     FetchedObj = riakc_pb_socket:get_index(Pid, ?ACCOUNTS_TABLE, {binary_index, "email"}, Email),
@@ -60,15 +66,6 @@ logical_delete(Uid, RiakState) ->
             DeletedAccount = Account#account{deleted = true},
             {ok, saved} = save(DeletedAccount, RiakState),
             {ok, deleted};
-        {error, not_found} ->
+        not_found ->
             not_found
-    end.
-
-read_value(FetchedObj)->
-    case FetchedObj of
-        {error, notfound}->
-            {error, not_found};
-        _ ->
-            {_, Value} = FetchedObj,
-            binary_to_term(riakc_obj:get_value(Value))    
     end.

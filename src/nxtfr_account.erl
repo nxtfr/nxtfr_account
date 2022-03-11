@@ -11,6 +11,9 @@
     create/3,
     read/1,
     add_avatar/2,
+    remove_avatar/2,
+    add_friend/2,
+    remove_friend/2,
     lookup/1,
     lookup/2,
     update_email/2,
@@ -40,31 +43,43 @@ create(Password, Extra) ->
 create(Email, Password, Extra) ->
     gen_server:call(?MODULE, {create, Email, Password, Extra}).
 
--spec read(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Account :: map() | {error, not_found}}.
+-spec read(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Account :: map() | {error, account_not_found}}.
 read(EmailOrUid) ->
     gen_server:call(?MODULE, {read, EmailOrUid}).
 
--spec add_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, added} | {error, not_found}.
+-spec add_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_added} | {error, account_not_found}.
 add_avatar(EmailOrUid, AvatarUid) ->
     gen_server:call(?MODULE, {add_avatar, EmailOrUid, AvatarUid}).
 
--spec lookup(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Uid :: binary() | {error, not_found}}.
+-spec remove_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_removed} | {error, avatar_not_found} | {error, account_not_found}.
+remove_avatar(EmailOrUid, AvatarUid) ->
+    gen_server:call(?MODULE, {remove_avatar, EmailOrUid, AvatarUid}).
+
+-spec add_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_added} | {error, account_not_found}.
+add_friend(EmailOrUid, FriendUid) ->
+    gen_server:call(?MODULE, {add_friend, EmailOrUid, FriendUid}).
+
+-spec remove_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_removed} | {error, friend_not_found} | {error, account_not_found}.
+remove_friend(EmailOrUid, FriendUid) ->
+    gen_server:call(?MODULE, {remove_friend, EmailOrUid, FriendUid}).
+
+-spec lookup(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Uid :: binary() | {error, account_not_found}}.
 lookup(EmailOrUid) ->
     gen_server:call(?MODULE, {lookup, EmailOrUid}).
 
--spec lookup(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, include_logically_deleted) -> {ok, Uid :: binary() | {error, not_found}}.
+-spec lookup(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, include_logically_deleted) -> {ok, Uid :: binary() | {error, account_not_found}}.
 lookup(EmailOrUid, include_logically_deleted) ->
     gen_server:call(?MODULE, {lookup, EmailOrUid, include_logically_deleted}).
 
--spec update_email(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, NewEmail :: binary()) -> {ok, updated} | {error, not_found} | {error, email_already_exists}.
+-spec update_email(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, NewEmail :: binary()) -> {ok, email_updated} | {error, account_not_found} | {error, email_already_exists}.
 update_email(EmailOrUid, NewEmail) ->
     gen_server:call(?MODULE, {update_email, EmailOrUid, NewEmail}).
 
--spec update_password(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, NewEmail :: atom()) -> {ok, updated} | {error, not_found}.
+-spec update_password(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, NewEmail :: atom()) -> {ok, password_updated} | {error, account_not_found}.
 update_password(EmailOrUid, NewPassword) ->
     gen_server:call(?MODULE, {update_password, EmailOrUid, NewPassword}).
 
--spec update_extra(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, Extra :: any()) -> {ok, updated} | {error, not_found}.
+-spec update_extra(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, Extra :: any()) -> {ok, extra_updated} | {error, account_not_found}.
 update_extra(EmailOrUid, NewExtra) ->
     gen_server:call(?MODULE, {update_extra, EmailOrUid, NewExtra}).
 
@@ -72,11 +87,11 @@ update_extra(EmailOrUid, NewExtra) ->
 validate(EmailOrUid, Password) ->
     gen_server:call(?MODULE, {validate, EmailOrUid, Password}).
 
--spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, deleted} | {error, not_found}.
+-spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_deleted} | {error, account_not_found}.
 delete(EmailOrUid) ->
     gen_server:call(?MODULE, {delete, EmailOrUid}).
 
--spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, logical_delete) -> {ok, deleted} | {error, not_found}.
+-spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, logical_delete) -> {ok, account_deleted} | {error, account_not_found}.
 delete(EmailOrUid, logical_delete) ->
     gen_server:call(?MODULE, {delete, EmailOrUid, logical_delete}).
 
@@ -114,14 +129,68 @@ handle_call({add_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = 
         {ok, #account{avatars = Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
                 true -> 
-                    {reply, {ok, already_added}, State};
+                    {reply, {ok, avatar_added}, State};
                 false -> 
                     UpdatedAccount = Account#account{
                         avatars = [AvatarUid | Avatars],
                         updated_at = get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, added}, State}
+                    {reply, {ok, avatar_added}, State}
+            end;
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
+handle_call({remove_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, State) of
+        {ok, #account{avatars = Avatars} = Account} ->
+            case lists:member(AvatarUid, Avatars) of
+                true ->
+                    UpdatedAccount = Account#account{
+                        avatars = lists:delete(AvatarUid, Avatars),
+                        updated_at = get_rfc3339_time()
+                    },
+                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, avatar_removed}, State}; 
+                false ->
+                    {reply, {ok, avatar_not_found}, State}
+            end;
+        not_found ->
+            {reply, {error, not_found}, State}
+    end;
+
+handle_call({add_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, State) of
+        {ok, #account{friends = Friends} = Account} ->
+            case lists:member(FriendUid, Friends) of
+                true -> 
+                    {reply, {ok, friend_added}, State};
+                false -> 
+                    UpdatedAccount = Account#account{
+                        friends = [FriendUid | Friends],
+                        updated_at = get_rfc3339_time()
+                    },
+                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, friend_added}, State}
+            end;
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
+handle_call({remove_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, State) of
+        {ok, #account{friends = Friends} = Account} ->
+            case lists:member(FriendUid, Friends) of
+                true ->
+                    UpdatedAccount = Account#account{
+                        friends = lists:delete(FriendUid, Friends),
+                        updated_at = get_rfc3339_time()
+                    },
+                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, friend_removed}, State}; 
+                false ->
+                    {reply, {ok, friend_not_found}, State}
             end;
         not_found ->
             {reply, {error, not_found}, State}
@@ -132,7 +201,7 @@ handle_call({read, EmailOrUid}, _From, State) ->
         {ok, Account} ->
             {reply, {ok, account_to_map(Account)}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({lookup, EmailOrUid}, _From, State) ->
@@ -140,7 +209,7 @@ handle_call({lookup, EmailOrUid}, _From, State) ->
         {ok, Account} ->
             {reply, {ok, Account#account.uid}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({lookup, EmailOrUid, include_logically_deleted}, _From, State) ->
@@ -148,7 +217,7 @@ handle_call({lookup, EmailOrUid, include_logically_deleted}, _From, State) ->
         {ok, Account} ->
             {reply, {ok, Account}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({update_email, EmailOrUid, NewEmail}, _From, #state{storage_module = StorageModule} = State) ->
@@ -163,9 +232,9 @@ handle_call({update_email, EmailOrUid, NewEmail}, _From, #state{storage_module =
                         updated_at = get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, updated}, State};
+                    {reply, {ok, email_updated}, State};
                 not_found ->
-                    {reply, {error, not_found}, State}
+                    {reply, {error, account_not_found}, State}
             end
     end;
 
@@ -181,9 +250,9 @@ handle_call(
                 updated_at = get_rfc3339_time()
             },
             {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-            {reply, {ok, updated}, State};
+            {reply, {ok, password_updated}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({update_extra, EmailOrUid, NewExtra}, _From, #state{storage_module = StorageModule} = State) ->
@@ -194,9 +263,9 @@ handle_call({update_extra, EmailOrUid, NewExtra}, _From, #state{storage_module =
                 updated_at = get_rfc3339_time()
             },
             {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-            {reply, {ok, updated}, State};
+            {reply, {ok, extra_updated}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({validate, EmailOrUid, Password}, _From, #state{crypto_module = CryptoModule} = State) ->
@@ -206,25 +275,25 @@ handle_call({validate, EmailOrUid, Password}, _From, #state{crypto_module = Cryp
             ValidationResult = CryptoModule:validate_password(Password, PasswordHash, State#state.crypto_state),
             {reply, ValidationResult, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({delete, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #account{uid = Uid}} ->
             {ok, deleted} = StorageModule:delete(Uid, State#state.storage_state),
-            {reply, {ok, deleted}, State};
+            {reply, {ok, account_deleted}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, #account{uid = Uid}} ->
             {ok, deleted} = StorageModule:logical_delete(Uid, State#state.storage_state),
-            {reply, {ok, deleted}, State};
+            {reply, {ok, account_deleted}, State};
         not_found ->
-            {reply, {error, not_found}, State}
+            {reply, {error, account_not_found}, State}
     end;
 
 handle_call(Call, _From, State) ->
@@ -262,6 +331,7 @@ create_account(Email, Password, Extra, #state{crypto_module = CryptoModule, stor
         email = Email,
         password_hash = PasswordHash,
         avatars = [],
+        friends = [],
         extra = Extra,
         created_at = get_rfc3339_time()
     },
@@ -312,6 +382,7 @@ account_to_map(Account) ->
         uid => Account#account.uid,
         email => Account#account.email,
         avatars => Account#account.avatars,
+        friends => Account#account.friends,
         extra => Account#account.extra,
         updated_at => Account#account.updated_at,
         created_at => Account#account.created_at

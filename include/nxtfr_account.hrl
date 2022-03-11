@@ -1,1 +1,1 @@
--record(account, {uid, email, password_hash, avatars, extra, created_at, updated_at, deleted = false}).
+-record(account, {uid, email, password_hash, avatars, friends, extra, created_at, updated_at, deleted = false}).
