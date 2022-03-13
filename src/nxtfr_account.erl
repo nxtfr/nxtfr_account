@@ -23,7 +23,8 @@
     validate/2,
     delete/1,
     delete/2,
-    restore/1
+    restore/1,
+    get_history/1
     ]).
 
 %% gen_server callbacks
@@ -105,7 +106,15 @@ delete(EmailOrUid, logical_delete) ->
 restore(EmailOrUid) ->
     gen_server:call(?MODULE, {restore, EmailOrUid}).
 
+-spec get_history(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_restored} | {error, account_not_found}.
+get_history(EmailOrUid) ->
+    gen_server:call(?MODULE, {get_history, EmailOrUid}).
+
 init([]) ->
+    %% In case the supervisor trigger restarts because of lost db connection
+    %% or similar. We want to avoid restarting too quickly.
+    timer:sleep(500),
+
     application:start(nxtfr_event),
     nxtfr_event:add_global_handler(nxtfr_account, nxtfr_account_event_handler),
     {ok, StorageModule} = application:get_env(nxtfr_account, storage_module),
@@ -307,8 +316,9 @@ handle_call({delete, EmailOrUid}, _From, #state{storage_module = StorageModule} 
 
 handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
-        {ok, #account{uid = Uid}} ->
-            {ok, deleted} = StorageModule:logical_delete(Uid, State#state.storage_state),
+        {ok, Account} ->
+            UpdatedAccount = Account#{deleted => true}, 
+            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_deleted}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -317,18 +327,25 @@ handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module =
 handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, #account{deleted = true} = Account} ->
-            UpdatedAccount = Account#account{
-                deleted = false,
-                updated_at = get_rfc3339_time()
+            UpdatedAccount = Account#{
+                deleted => false,
+                updated_at => get_rfc3339_time()
             },
             {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_restored}, State};
-        {ok, #account{deleted = false}} ->
+        {ok, #{deleted := false}} ->
             {reply, {ok, account_not_deleted}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
 
+handle_call({get_history, EmailOrUid}, _From, State) ->
+    case get_history(EmailOrUid, State) of
+        {ok, History} ->
+            {reply, {ok, History}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
 
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
@@ -360,14 +377,23 @@ get_rfc3339_time() ->
 
 create_account(Email, Password, Extra, #state{crypto_module = CryptoModule, storage_module = StorageModule} = State) ->
     {ok, PasswordHash} = CryptoModule:hash_password(Password, State#state.crypto_state),
-    Account = #account{
-        uid = make_uid(),
-        email = Email,
-        password_hash = PasswordHash,
-        avatars = [],
-        friends = [],
-        extra = Extra,
-        created_at = get_rfc3339_time()
+    Uid = make_uid(),
+    %% In practive the probability of an UID already existing is almost none.
+    not_found = StorageModule:get_by_uid(Uid, State#state.storage_state),
+    History = #{
+        uid => Uid,
+        actions => [
+            #{event => created, time => get_rfc3339_time}
+        ]},
+    {ok, saved} = StorageModule:save_history(History, State#state.storage_state),
+    Account = #{
+        uid => Uid,
+        email => Email,
+        password_hash => PasswordHash,
+        avatars => [],
+        friends => [],
+        extra => Extra,
+        created_at => get_rfc3339_time()
     },
     {ok, saved} = StorageModule:save(Account, State#state.storage_state),
     {ok, Account}.
@@ -389,19 +415,32 @@ get_account(EmailOrUid, include_logically_deleted, State) ->
 read_account_from_storage(EmailOrUid, #state{storage_module = StorageModule, storage_state = StorageState}) ->
     case EmailOrUid of
         {email, Email} ->
-            case StorageModule:load_by_email(Email, StorageState) of
+            case StorageModule:get_by_email(Email, StorageState) of
                 {ok, Account} -> {ok, Account};
                 not_found -> not_found
             end;
         {uid, Uid} ->
-            case StorageModule:load_by_uid(Uid, StorageState) of
+            case StorageModule:get_by_uid(Uid, StorageState) of
                 {ok, Account} -> {ok, Account};
                 not_found -> not_found
             end
     end.
 
+get_history(EmailOrUid, #state{storage_module = StorageModule, storage_state = StorageState}) ->
+    case EmailOrUid of
+        {email, Email} ->
+            case StorageModule:get_by_email(Email, StorageState) of
+                {ok, #account{uid = Uid}} ->
+                    StorageModule:get_history(Uid);
+                not_found ->
+                    not_found
+            end;
+        {uid, Uid} ->
+            StorageModule:get_history(Uid, StorageState)
+    end.
+
 email_exists(Email, #state{storage_module = StorageModule} = State) ->
-    case StorageModule:load_by_email(Email, State#state.storage_state) of
+    case StorageModule:get_by_email(Email, State#state.storage_state) of
         {ok, _Account} -> true;
         not_found -> false
     end.
