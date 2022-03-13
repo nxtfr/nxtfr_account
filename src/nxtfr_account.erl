@@ -131,28 +131,28 @@ init([]) ->
 
 handle_call({create, Password, Extra}, _From, State) ->
     Email = undefined,
-    {ok, Account} = create_account(Email, Password, Extra, State),
-    {reply, {ok, Account#account.uid}, State};
+    {ok, #{uid := Uid}} = create_account(Email, Password, Extra, State),
+    {reply, {ok, Uid}, State};
 
 handle_call({create, Email, Password, Extra}, _From, State) ->
     case email_exists(Email, State) of
         true -> 
             {reply, {error, email_already_exists}, State};
         false ->
-            {ok, Account} = create_account(Email, Password, Extra, State),
-            {reply, {ok, Account#account.uid}, State}
+            {ok, #{uid := Uid}} = create_account(Email, Password, Extra, State),
+            {reply, {ok, Uid}, State}
     end;
 
 handle_call({add_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{avatars = Avatars} = Account} ->
+        {ok, #{avatars := Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
                 true -> 
                     {reply, {ok, avatar_added}, State};
                 false -> 
-                    UpdatedAccount = Account#account{
-                        avatars = [AvatarUid | Avatars],
-                        updated_at = get_rfc3339_time()
+                    UpdatedAccount = Account#{
+                        avatars => [AvatarUid | Avatars],
+                        updated_at => get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, avatar_added}, State}
@@ -163,12 +163,12 @@ handle_call({add_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = 
 
 handle_call({remove_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{avatars = Avatars} = Account} ->
+        {ok, #{avatars := Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
                 true ->
-                    UpdatedAccount = Account#account{
-                        avatars = lists:delete(AvatarUid, Avatars),
-                        updated_at = get_rfc3339_time()
+                    UpdatedAccount = Account#{
+                        avatars => lists:delete(AvatarUid, Avatars),
+                        updated_at => get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, avatar_removed}, State}; 
@@ -181,14 +181,14 @@ handle_call({remove_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module
 
 handle_call({add_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{friends = Friends} = Account} ->
+        {ok, #{friends := Friends} = Account} ->
             case lists:member(FriendUid, Friends) of
                 true -> 
                     {reply, {ok, friend_added}, State};
                 false -> 
-                    UpdatedAccount = Account#account{
-                        friends = [FriendUid | Friends],
-                        updated_at = get_rfc3339_time()
+                    UpdatedAccount = Account#{
+                        friends => [FriendUid | Friends],
+                        updated_at => get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, friend_added}, State}
@@ -199,12 +199,12 @@ handle_call({add_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = 
 
 handle_call({remove_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{friends = Friends} = Account} ->
+        {ok, #{friends := Friends} = Account} ->
             case lists:member(FriendUid, Friends) of
                 true ->
-                    UpdatedAccount = Account#account{
-                        friends = lists:delete(FriendUid, Friends),
-                        updated_at = get_rfc3339_time()
+                    UpdatedAccount = Account#{
+                        friends => lists:delete(FriendUid, Friends),
+                        updated_at => get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, friend_removed}, State}; 
@@ -218,7 +218,7 @@ handle_call({remove_friend, EmailOrUid, FriendUid}, _From, #state{storage_module
 handle_call({read, EmailOrUid}, _From, State) ->
     case get_account(EmailOrUid, State) of
         {ok, Account} ->
-            {reply, {ok, account_to_map(Account)}, State};
+            {reply, {ok, Account}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
@@ -226,23 +226,23 @@ handle_call({read, EmailOrUid}, _From, State) ->
 handle_call({read, EmailOrUid, include_logically_deleted}, _From, State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, Account} ->
-            {reply, {ok, account_to_map(Account)}, State};
+            {reply, {ok, Account}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
 
 handle_call({lookup, EmailOrUid}, _From, State) ->
     case get_account(EmailOrUid, State) of
-        {ok, Account} ->
-            {reply, {ok, Account#account.uid}, State};
+        {ok, #{uid := Uid}} ->
+            {reply, {ok, Uid}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
 
 handle_call({lookup, EmailOrUid, include_logically_deleted}, _From, State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
-        {ok, Account} ->
-            {reply, {ok, Account#account.uid}, State};
+        {ok, #{uid := Uid}} ->
+            {reply, {ok, Uid}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
     end;
@@ -254,9 +254,9 @@ handle_call({update_email, EmailOrUid, NewEmail}, _From, #state{storage_module =
         false ->
             case get_account(EmailOrUid, State) of
                 {ok, Account} ->
-                    UpdatedAccount = Account#account{
-                        email = NewEmail,
-                        updated_at = get_rfc3339_time()
+                    UpdatedAccount = Account#{
+                        email => NewEmail,
+                        updated_at => get_rfc3339_time()
                     },
                     {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, email_updated}, State};
@@ -272,9 +272,9 @@ handle_call(
     case get_account(EmailOrUid, State) of
         {ok, Account} ->
             {ok, NewPasswordHash} = CryptoModule:hash_password(NewPassword, State#state.crypto_state),
-            UpdatedAccount = Account#account{
-                password_hash = NewPasswordHash,
-                updated_at = get_rfc3339_time()
+            UpdatedAccount = Account#{
+                password_hash => NewPasswordHash,
+                updated_at => get_rfc3339_time()
             },
             {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
             {reply, {ok, password_updated}, State};
@@ -285,9 +285,9 @@ handle_call(
 handle_call({update_extra, EmailOrUid, NewExtra}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, Account} ->
-            UpdatedAccount = Account#account{
-                extra = NewExtra,
-                updated_at = get_rfc3339_time()
+            UpdatedAccount = Account#{
+                extra => NewExtra,
+                updated_at => get_rfc3339_time()
             },
             {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
             {reply, {ok, extra_updated}, State};
@@ -297,7 +297,7 @@ handle_call({update_extra, EmailOrUid, NewExtra}, _From, #state{storage_module =
 
 handle_call({validate, EmailOrUid, Password}, _From, #state{crypto_module = CryptoModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{password_hash = PasswordHash}} ->
+        {ok, #{password_hash := PasswordHash}} ->
             %% ValidationResult returns {ok, validation_success} | error, validation_failure}
             ValidationResult = CryptoModule:validate_password(Password, PasswordHash, State#state.crypto_state),
             {reply, ValidationResult, State};
@@ -307,7 +307,7 @@ handle_call({validate, EmailOrUid, Password}, _From, #state{crypto_module = Cryp
 
 handle_call({delete, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
-        {ok, #account{uid = Uid}} ->
+        {ok, #{uid := Uid}} ->
             {ok, deleted} = StorageModule:delete(Uid, State#state.storage_state),
             {reply, {ok, account_deleted}, State};
         not_found ->
@@ -326,7 +326,7 @@ handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module =
 
 handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
-        {ok, #account{deleted = true} = Account} ->
+        {ok, #{deleted := true} = Account} ->
             UpdatedAccount = Account#{
                 deleted => false,
                 updated_at => get_rfc3339_time()
@@ -375,17 +375,21 @@ make_uid() ->
 get_rfc3339_time() ->
     list_to_binary(calendar:system_time_to_rfc3339(os:system_time(second))).
 
-create_account(Email, Password, Extra, #state{crypto_module = CryptoModule, storage_module = StorageModule} = State) ->
-    {ok, PasswordHash} = CryptoModule:hash_password(Password, State#state.crypto_state),
+create_account(Email, Password, Extra, #state{
+        crypto_module = CryptoModule,
+        crypto_state = CryptoState,
+        storage_module = StorageModule,
+        storage_state = StorageState} = State) ->
+    {ok, PasswordHash} = CryptoModule:hash_password(Password, CryptoState),
     Uid = make_uid(),
     %% In practive the probability of an UID already existing is almost none.
-    not_found = StorageModule:get_by_uid(Uid, State#state.storage_state),
+    not_found = StorageModule:get_by_uid(Uid, StorageState),
     History = #{
         uid => Uid,
         actions => [
             #{event => created, time => get_rfc3339_time}
         ]},
-    {ok, saved} = StorageModule:save_history(History, State#state.storage_state),
+    {ok, saved} = StorageModule:save_history(History, StorageState),
     Account = #{
         uid => Uid,
         email => Email,
@@ -395,19 +399,19 @@ create_account(Email, Password, Extra, #state{crypto_module = CryptoModule, stor
         extra => Extra,
         created_at => get_rfc3339_time()
     },
-    {ok, saved} = StorageModule:save(Account, State#state.storage_state),
+    {ok, saved} = StorageModule:save(Account, StorageState),
     {ok, Account}.
 
 get_account(EmailOrUid, State) ->
     case read_account_from_storage(EmailOrUid, State) of
-        {ok, #account{deleted = true}} -> not_found;
+        {ok, #{deleted := true}} -> not_found;
         {ok, Account} -> {ok, Account};
         not_found -> not_found
     end.
 
 get_account(EmailOrUid, include_logically_deleted, State) ->
     case read_account_from_storage(EmailOrUid, State) of
-        {ok, #account{deleted = true} = Account} -> {ok, Account};
+        {ok, #{deleted := true} = Account} -> {ok, Account};
         {ok, Account} -> {ok, Account};
         not_found -> not_found
     end.
@@ -430,7 +434,7 @@ get_history(EmailOrUid, #state{storage_module = StorageModule, storage_state = S
     case EmailOrUid of
         {email, Email} ->
             case StorageModule:get_by_email(Email, StorageState) of
-                {ok, #account{uid = Uid}} ->
+                {ok, #{uid := Uid}} ->
                     StorageModule:get_history(Uid);
                 not_found ->
                     not_found
@@ -444,14 +448,3 @@ email_exists(Email, #state{storage_module = StorageModule} = State) ->
         {ok, _Account} -> true;
         not_found -> false
     end.
-
-account_to_map(Account) ->
-    #{
-        uid => Account#account.uid,
-        email => Account#account.email,
-        avatars => Account#account.avatars,
-        friends => Account#account.friends,
-        extra => Account#account.extra,
-        updated_at => Account#account.updated_at,
-        created_at => Account#account.created_at
-    }.

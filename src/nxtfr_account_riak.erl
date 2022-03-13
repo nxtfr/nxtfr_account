@@ -32,8 +32,8 @@ init() ->
 stop(#riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:stop(Pid).
 
--spec save(Account :: account(), RiakState :: riak_state()) -> {ok, saved}.    
-save(#account{uid = Uid, email = Email} = Account, #riak_state{riak_client_pid = Pid}) ->
+-spec save(Account :: map(), RiakState :: riak_state()) -> {ok, saved}.    
+save(#{uid := Uid, email := Email} = Account, #riak_state{riak_client_pid = Pid}) ->
     NewAccount = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(Account)),
     AccountMetaData = riakc_obj:get_update_metadata(NewAccount),
     AccountMetaData2 = riakc_obj:set_secondary_index(AccountMetaData, [{{binary_index, "email"}, [Email]}]),
@@ -66,9 +66,9 @@ delete(Uid, #riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:delete(Pid, ?ACCOUNTS_TABLE, Uid),
     {ok, deleted}.
 
-save_history(#account_history{uid = Uid} = History, #riak_state{riak_client_pid = Pid}) -> 
-    NewHistory = riakc_obj:new(?ACCOUNTS_HISTORY_TABLE, Uid, term_to_binary(History)),
-    riakc_pb_socket:put(Pid, NewHistory, [{w, 1}, {dw, 1}, return_body]),
+save_history(#{uid := Uid} = History, #riak_state{riak_client_pid = Pid}) -> 
+    HistoryObject = riakc_obj:new(?ACCOUNTS_HISTORY_TABLE, Uid, term_to_binary(History)),
+    riakc_pb_socket:put(Pid, HistoryObject, [{w, 1}, {dw, 1}, return_body]),
     {ok, saved}.
 
 get_history(Uid, #riak_state{riak_client_pid = Pid}) ->
