@@ -2,8 +2,6 @@
 -author("christian@flodihn.se").
 -behaviour(gen_server).
 
--include("nxtfr_account.hrl").
-
 %% External exports
 -export([
     start_link/0,
@@ -11,10 +9,10 @@
     create/3,
     read/1,
     read/2,
-    add_avatar/2,
-    remove_avatar/2,
-    add_friend/2,
-    remove_friend/2,
+    link_avatar/2,
+    unlink_avatar/2,
+    link_friend/2,
+    unlink_friend/2,
     lookup/1,
     lookup/2,
     update_email/2,
@@ -22,19 +20,24 @@
     update_extra/2,
     validate/2,
     delete/1,
-    delete/2,
+    logical_delete/1,
     restore/1,
-    get_history/1
-    ]).
+    get_history/1]).
 
 %% gen_server callbacks
 -export([
-    init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2
-    ]).
+init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]).
 
 %% server state
 -record(state, {storage_module, crypto_module, storage_state, crypto_state}).
 
+-type state() :: #state{
+    storage_module :: atom,
+    crypto_module :: atom(),
+    storage_state :: any(),
+    crypto_state :: any()}.
+
+-spec start_link() -> {ok, Pid :: pid()}.
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
@@ -54,21 +57,21 @@ read(EmailOrUid) ->
 read(EmailOrUid, include_logically_deleted) ->
     gen_server:call(?MODULE, {read, EmailOrUid, include_logically_deleted}).
 
--spec add_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_added} | {error, account_not_found}.
-add_avatar(EmailOrUid, AvatarUid) ->
-    gen_server:call(?MODULE, {add_avatar, EmailOrUid, AvatarUid}).
+-spec link_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_added} | {error, account_not_found}.
+link_avatar(EmailOrUid, AvatarUid) ->
+    gen_server:call(?MODULE, {link_avatar, EmailOrUid, AvatarUid}).
 
--spec remove_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_removed} | {error, avatar_not_found} | {error, account_not_found}.
-remove_avatar(EmailOrUid, AvatarUid) ->
-    gen_server:call(?MODULE, {remove_avatar, EmailOrUid, AvatarUid}).
+-spec unlink_avatar(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, AvatarUid :: binary()) -> {ok, avatar_removed} | {error, avatar_not_found} | {error, account_not_found}.
+unlink_avatar(EmailOrUid, AvatarUid) ->
+    gen_server:call(?MODULE, {unlink_avatar, EmailOrUid, AvatarUid}).
 
--spec add_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_added} | {error, account_not_found}.
-add_friend(EmailOrUid, FriendUid) ->
-    gen_server:call(?MODULE, {add_friend, EmailOrUid, FriendUid}).
+-spec link_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_added} | {error, account_not_found}.
+link_friend(EmailOrUid, FriendUid) ->
+    gen_server:call(?MODULE, {link_friend, EmailOrUid, FriendUid}).
 
--spec remove_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_removed} | {error, friend_not_found} | {error, account_not_found}.
-remove_friend(EmailOrUid, FriendUid) ->
-    gen_server:call(?MODULE, {remove_friend, EmailOrUid, FriendUid}).
+-spec unlink_friend(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, FriendUid :: binary()) -> {ok, friend_removed} | {error, friend_not_found} | {error, account_not_found}.
+unlink_friend(EmailOrUid, FriendUid) ->
+    gen_server:call(?MODULE, {unlink_friend, EmailOrUid, FriendUid}).
 
 -spec lookup(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, Uid :: binary() | {error, account_not_found}}.
 lookup(EmailOrUid) ->
@@ -98,9 +101,9 @@ validate(EmailOrUid, Password) ->
 delete(EmailOrUid) ->
     gen_server:call(?MODULE, {delete, EmailOrUid}).
 
--spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, logical_delete) -> {ok, account_deleted} | {error, account_not_found}.
-delete(EmailOrUid, logical_delete) ->
-    gen_server:call(?MODULE, {delete, EmailOrUid, logical_delete}).
+-spec logical_delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_deleted} | {error, account_not_found}.
+logical_delete(EmailOrUid) ->
+    gen_server:call(?MODULE, {logical_delete, EmailOrUid}).
 
 -spec restore(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_restored} | {error, account_not_found}.
 restore(EmailOrUid) ->
@@ -110,11 +113,8 @@ restore(EmailOrUid) ->
 get_history(EmailOrUid) ->
     gen_server:call(?MODULE, {get_history, EmailOrUid}).
 
+-spec init([]) -> {ok, state()}.
 init([]) ->
-    %% In case the supervisor trigger restarts because of lost db connection
-    %% or similar. We want to avoid restarting too quickly.
-    timer:sleep(500),
-
     application:start(nxtfr_event),
     nxtfr_event:add_global_handler(nxtfr_account, nxtfr_account_event_handler),
     {ok, StorageModule} = application:get_env(nxtfr_account, storage_module),
@@ -143,7 +143,7 @@ handle_call({create, Email, Password, Extra}, _From, State) ->
             {reply, {ok, Uid}, State}
     end;
 
-handle_call({add_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
+handle_call({link_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #{avatars := Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
@@ -161,7 +161,7 @@ handle_call({add_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = 
             {reply, {error, account_not_found}, State}
     end;
 
-handle_call({remove_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
+handle_call({unlink_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #{avatars := Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
@@ -179,7 +179,7 @@ handle_call({remove_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module
             {reply, {error, not_found}, State}
     end;
 
-handle_call({add_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
+handle_call({link_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #{friends := Friends} = Account} ->
             case lists:member(FriendUid, Friends) of
@@ -197,7 +197,7 @@ handle_call({add_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = 
             {reply, {error, account_not_found}, State}
     end;
 
-handle_call({remove_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
+handle_call({unlink_friend, EmailOrUid, FriendUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #{friends := Friends} = Account} ->
             case lists:member(FriendUid, Friends) of
@@ -314,7 +314,7 @@ handle_call({delete, EmailOrUid}, _From, #state{storage_module = StorageModule} 
             {reply, {error, account_not_found}, State}
     end;
 
-handle_call({delete, EmailOrUid, logical_delete}, _From, #state{storage_module = StorageModule} = State) ->
+handle_call({logical_delete, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, Account} ->
             UpdatedAccount = Account#{deleted => true}, 
@@ -379,7 +379,7 @@ create_account(Email, Password, Extra, #state{
         crypto_module = CryptoModule,
         crypto_state = CryptoState,
         storage_module = StorageModule,
-        storage_state = StorageState} = State) ->
+        storage_state = StorageState}) ->
     {ok, PasswordHash} = CryptoModule:hash_password(Password, CryptoState),
     Uid = make_uid(),
     %% In practive the probability of an UID already existing is almost none.
@@ -401,6 +401,14 @@ create_account(Email, Password, Extra, #state{
     },
     {ok, saved} = StorageModule:save(Account, StorageState),
     {ok, Account}.
+
+create_action(Uid, Event) ->
+    #{
+        uid => Uid,
+        event => Event,
+        occured_at => get_rfc3339_time(),
+        status => unconfirmed
+    }.
 
 get_account(EmailOrUid, State) ->
     case read_account_from_storage(EmailOrUid, State) of

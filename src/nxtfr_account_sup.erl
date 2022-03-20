@@ -26,5 +26,3 @@ init([]) ->
         type => worker},
     ChildSpecs = [NxtfrAccount],
     {ok, {SupFlags, ChildSpecs}}.
-
-%% internal functions

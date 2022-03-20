@@ -4,8 +4,6 @@
 -define(ACCOUNTS_TABLE, <<"accounts">>).
 -define(ACCOUNTS_HISTORY_TABLE, <<"accounts_history">>).
 
--include("nxtfr_account.hrl").
-
 -record(riak_state, {riak_client_pid :: pid()}).
 
 -type riak_state() :: #riak_state{}.
@@ -22,6 +20,9 @@
 
 -spec init() -> {ok, RiakState :: riak_state()}.
 init() ->
+    %% In case the supervisor trigger restarts because of lost db connection
+    %% or similar. We want to avoid restarting too quickly.
+    timer:sleep(500),
     {ok, RiakOptions} = application:get_env(nxtfr_account, riak_options),
     Hostname = proplists:get_value(hostname, RiakOptions, "127.0.0.1"),
     Port = proplists:get_value(port, RiakOptions, 8087),
@@ -34,14 +35,14 @@ stop(#riak_state{riak_client_pid = Pid}) ->
 
 -spec save(Account :: map(), RiakState :: riak_state()) -> {ok, saved}.    
 save(#{uid := Uid, email := Email} = Account, #riak_state{riak_client_pid = Pid}) ->
-    NewAccount = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(Account)),
-    AccountMetaData = riakc_obj:get_update_metadata(NewAccount),
-    AccountMetaData2 = riakc_obj:set_secondary_index(AccountMetaData, [{{binary_index, "email"}, [Email]}]),
-    NewAccountWithIndex = riakc_obj:update_metadata(NewAccount, AccountMetaData2),
-    riakc_pb_socket:put(Pid, NewAccountWithIndex, [{w, 1}, {dw, 1}, return_body]),
+    AccountObject = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(Account)),
+    AccountObjectMetaData = riakc_obj:get_update_metadata(AccountObject),
+    AccountObjectMetaData2 = riakc_obj:set_secondary_index(AccountObjectMetaData, [{{binary_index, "email"}, [Email]}]),
+    AccountObjectWithIndex = riakc_obj:update_metadata(AccountObject, AccountObjectMetaData2),
+    riakc_pb_socket:put(Pid, AccountObjectWithIndex, [{w, 1}, {dw, 1}, return_body]),
     {ok, saved}.
 
-%-spec load_by_uid(Uid :: binary, RiakState :: riak_state()) -> {ok, Account :: account()} | not_found.
+-spec get_by_uid(Uid :: binary, RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
 get_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
     case riakc_pb_socket:get(Pid, ?ACCOUNTS_TABLE, Uid) of
         {error, notfound}->
@@ -50,7 +51,7 @@ get_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
             {ok, binary_to_term(riakc_obj:get_value(Object))}    
     end.
 
--spec get_by_email(Email :: binary, RiakState :: riak_state()) -> {ok, Account :: account()} | not_found.
+-spec get_by_email(Email :: binary, RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
 get_by_email(Email, #riak_state{riak_client_pid = Pid} = RiakState) ->
     case riakc_pb_socket:get_index(Pid, ?ACCOUNTS_TABLE, {binary_index, "email"}, Email) of
         {error, notfound} ->
