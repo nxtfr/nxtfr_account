@@ -19,6 +19,8 @@
     update_password/2,
     update_extra/2,
     validate/2,
+    lock/1,
+    unlock/1,
     delete/1,
     logical_delete/1,
     restore/1,
@@ -27,7 +29,12 @@
 
 %% gen_server callbacks
 -export([
-init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]).
+    init/1,
+    handle_call/3,
+    handle_cast/2,
+    handle_info/2,
+    code_change/3,
+    terminate/2]).
 
 %% server state
 -record(state, {storage_module, crypto_module, storage_state, crypto_state}).
@@ -37,6 +44,9 @@ init/1, handle_call/3, handle_cast/2, handle_info/2, code_change/3, terminate/2]
     crypto_module :: atom(),
     storage_state :: any(),
     crypto_state :: any()}.
+
+%% The default "source" when recording history events performed by the system.
+-define(SYSTEM_EVENT_SOURCE, account_system).
 
 -spec start_link() -> {ok, Pid :: pid()}.
 start_link() ->
@@ -94,9 +104,17 @@ update_password(EmailOrUid, NewPassword) ->
 update_extra(EmailOrUid, NewExtra) ->
     gen_server:call(?MODULE, {update_extra, EmailOrUid, NewExtra}).
 
--spec validate(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, Password :: binary()) -> {ok, validation_success} | {error, validation_failure} | {error, not_found}.
+-spec validate(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, Password :: binary()) -> {ok, validation_success} | {error, validation_failure} | {error, account_not_found}.
 validate(EmailOrUid, Password) ->
     gen_server:call(?MODULE, {validate, EmailOrUid, Password}).
+
+-spec lock(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_locked} | {error, account_already_locked} | {error, account_not_found}.
+lock(EmailOrUid) ->
+    gen_server:call(?MODULE, {lock, EmailOrUid}).
+
+-spec unlock(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_unlocked} | {error, account_not_locked} | {error, account_not_found}.
+unlock(EmailOrUid) ->
+    gen_server:call(?MODULE, {unlock, EmailOrUid}).
 
 -spec delete(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_deleted} | {error, account_not_found}.
 delete(EmailOrUid) ->
@@ -135,7 +153,7 @@ init([]) ->
         crypto_state = CryptoState}}.
 
 handle_call({create, Password, Extra}, _From, State) ->
-    Email = undefined,
+    Email = <<"undefined">>,
     {ok, #{uid := Uid}} = create_account(Email, Password, Extra, State),
     {reply, {ok, Uid}, State};
 
@@ -258,11 +276,17 @@ handle_call({update_email, EmailOrUid, NewEmail}, _From, #state{storage_module =
             {reply, {error, email_already_exists}, State};
         false ->
             case get_account(EmailOrUid, State) of
-                {ok, Account} ->
+                {ok, #{email := OldEmail} = Account} ->
                     UpdatedAccount = Account#{
                         email => NewEmail,
                         updated_at => get_rfc3339_time()
                     },
+                    {ok, history_added} = add_history(
+                        EmailOrUid,
+                        email_changed,
+                        ?SYSTEM_EVENT_SOURCE,
+                        <<"Email changed from ", OldEmail/binary, " to ", NewEmail/binary>>,
+                        State),
                     {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, email_updated}, State};
                 not_found ->
@@ -281,6 +305,11 @@ handle_call(
                 password_hash => NewPasswordHash,
                 updated_at => get_rfc3339_time()
             },
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                password_updated,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
             {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, password_updated}, State};
         not_found ->
@@ -310,9 +339,55 @@ handle_call({validate, EmailOrUid, Password}, _From, #state{crypto_module = Cryp
             {reply, {error, account_not_found}, State}
     end;
 
+handle_call({lock, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, State) of
+        {ok, #{locked := false} = Account} ->
+            UpdatedAccount = Account#{
+                locked => true,
+                updated_at => get_rfc3339_time()
+            },
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                account_locked,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+            {reply, {ok, account_locked}, State};
+        {ok, #{locked := true}} ->
+            {reply, {ok, account_already_locked}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
+
+handle_call({unlock, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
+    case get_account(EmailOrUid, State) of
+        {ok, #{locked := true} = Account} ->
+            UpdatedAccount = Account#{
+                locked => false,
+                updated_at => get_rfc3339_time()
+            },
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                account_unlocked,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+            {reply, {ok, account_unlocked}, State};
+        {ok, #{locked := false}} ->
+            {reply, {error, account_not_locked}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
 handle_call({delete, EmailOrUid}, _From, #state{storage_module = StorageModule} = State) ->
     case get_account(EmailOrUid, State) of
         {ok, #{uid := Uid}} ->
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                account_permanently_deleted,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
             {ok, deleted} = StorageModule:delete(Uid, State#state.storage_state),
             {reply, {ok, account_deleted}, State};
         not_found ->
@@ -323,6 +398,11 @@ handle_call({logical_delete, EmailOrUid}, _From, #state{storage_module = Storage
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, Account} ->
             UpdatedAccount = Account#{deleted => true}, 
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                account_logically_deleted,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
             {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_deleted}, State};
         not_found ->
@@ -336,6 +416,11 @@ handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule}
                 deleted => false,
                 updated_at => get_rfc3339_time()
             },
+            {ok, history_added} = add_history(
+                EmailOrUid,
+                account_restored,
+                ?SYSTEM_EVENT_SOURCE,
+                State),
             {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_restored}, State};
         {ok, #{deleted := false}} ->
@@ -421,8 +506,13 @@ read_account_from_storage(EmailOrUid, #state{storage_module = StorageModule, sto
             end
     end.
 
-add_history(EmailOrUid, Event, Source, #state{storage_module = StorageModule, storage_state = StorageState} = State) ->
-    HistoryEvent = make_history_event(Event, Source),
+add_history(EmailOrUid, Event, Source, State) ->
+    add_history(EmailOrUid, Event, Source, <<>>, State).
+
+add_history(EmailOrUid, Event, Source, Info, State) ->
+    StorageModule = State#state.storage_module,
+    StorageState = State#state.storage_state,
+    HistoryEvent = make_history_event(Event, Source, Info),
     case get_history(EmailOrUid, State) of
         {ok, #{events := Events} = History} ->
             UpdatedHistory = History#{events => lists:append([HistoryEvent], Events)},
@@ -466,19 +556,21 @@ make_account(Uid, Email, PasswordHash, Extra) ->
         avatars => [],
         friends => [],
         extra => Extra,
+        locked => false,
         created_at => get_rfc3339_time()
     }.
 
 make_history(Uid) ->
     #{
         uid => Uid,
-        events => [make_history_event(account_created, system)]
+        events => [make_history_event(account_created, system, <<>>)]
     }.
 
-make_history_event(Event, Source) ->
+make_history_event(Event, Source, Info) ->
     #{
         event => Event,
         source => Source,
+        info => Info,
         occured_at => get_rfc3339_time()
     }.
 
