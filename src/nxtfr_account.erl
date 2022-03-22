@@ -22,7 +22,8 @@
     delete/1,
     logical_delete/1,
     restore/1,
-    get_history/1]).
+    add_history/3,
+    read_history/1]).
 
 %% gen_server callbacks
 -export([
@@ -109,9 +110,13 @@ logical_delete(EmailOrUid) ->
 restore(EmailOrUid) ->
     gen_server:call(?MODULE, {restore, EmailOrUid}).
 
--spec get_history(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_restored} | {error, account_not_found}.
-get_history(EmailOrUid) ->
-    gen_server:call(?MODULE, {get_history, EmailOrUid}).
+-spec add_history(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}, Event :: atom(), Source :: any()) -> {ok, history_added} | {error, account_not_found}.
+add_history(EmailOrUid, Event, Source) ->
+    gen_server:call(?MODULE, {add_history, EmailOrUid, Event, Source}).
+
+-spec read_history(EmailOrUid :: {email, Email :: binary} | {uid, Uid :: binary}) -> {ok, account_restored} | {error, account_not_found}.
+read_history(EmailOrUid) ->
+    gen_server:call(?MODULE, {read_history, EmailOrUid}).
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
@@ -148,14 +153,14 @@ handle_call({link_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module =
         {ok, #{avatars := Avatars} = Account} ->
             case lists:member(AvatarUid, Avatars) of
                 true -> 
-                    {reply, {ok, avatar_added}, State};
+                    {reply, {ok, avatar_linked}, State};
                 false -> 
                     UpdatedAccount = Account#{
                         avatars => [AvatarUid | Avatars],
                         updated_at => get_rfc3339_time()
                     },
-                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, avatar_added}, State}
+                    {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, avatar_linked}, State}
             end;
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -170,10 +175,10 @@ handle_call({unlink_avatar, EmailOrUid, AvatarUid}, _From, #state{storage_module
                         avatars => lists:delete(AvatarUid, Avatars),
                         updated_at => get_rfc3339_time()
                     },
-                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, avatar_removed}, State}; 
+                    {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, avatar_unlinked}, State}; 
                 false ->
-                    {reply, {ok, avatar_not_found}, State}
+                    {reply, {ok, avatar_link_not_found}, State}
             end;
         not_found ->
             {reply, {error, not_found}, State}
@@ -184,14 +189,14 @@ handle_call({link_friend, EmailOrUid, FriendUid}, _From, #state{storage_module =
         {ok, #{friends := Friends} = Account} ->
             case lists:member(FriendUid, Friends) of
                 true -> 
-                    {reply, {ok, friend_added}, State};
+                    {reply, {ok, friend_linked}, State};
                 false -> 
                     UpdatedAccount = Account#{
                         friends => [FriendUid | Friends],
                         updated_at => get_rfc3339_time()
                     },
-                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, friend_added}, State}
+                    {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, friend_linked}, State}
             end;
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -206,10 +211,10 @@ handle_call({unlink_friend, EmailOrUid, FriendUid}, _From, #state{storage_module
                         friends => lists:delete(FriendUid, Friends),
                         updated_at => get_rfc3339_time()
                     },
-                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
-                    {reply, {ok, friend_removed}, State}; 
+                    {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
+                    {reply, {ok, friend_unlinked}, State}; 
                 false ->
-                    {reply, {ok, friend_not_found}, State}
+                    {reply, {ok, friend_link_not_found}, State}
             end;
         not_found ->
             {reply, {error, not_found}, State}
@@ -258,7 +263,7 @@ handle_call({update_email, EmailOrUid, NewEmail}, _From, #state{storage_module =
                         email => NewEmail,
                         updated_at => get_rfc3339_time()
                     },
-                    {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+                    {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
                     {reply, {ok, email_updated}, State};
                 not_found ->
                     {reply, {error, account_not_found}, State}
@@ -276,7 +281,7 @@ handle_call(
                 password_hash => NewPasswordHash,
                 updated_at => get_rfc3339_time()
             },
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, password_updated}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -289,7 +294,7 @@ handle_call({update_extra, EmailOrUid, NewExtra}, _From, #state{storage_module =
                 extra => NewExtra,
                 updated_at => get_rfc3339_time()
             },
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, extra_updated}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -318,7 +323,7 @@ handle_call({logical_delete, EmailOrUid}, _From, #state{storage_module = Storage
     case get_account(EmailOrUid, include_logically_deleted, State) of
         {ok, Account} ->
             UpdatedAccount = Account#{deleted => true}, 
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_deleted}, State};
         not_found ->
             {reply, {error, account_not_found}, State}
@@ -331,7 +336,7 @@ handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule}
                 deleted => false,
                 updated_at => get_rfc3339_time()
             },
-            {ok, saved} = StorageModule:save(UpdatedAccount, State#state.storage_state),
+            {ok, updated} = StorageModule:update(UpdatedAccount, State#state.storage_state),
             {reply, {ok, account_restored}, State};
         {ok, #{deleted := false}} ->
             {reply, {ok, account_not_deleted}, State};
@@ -339,7 +344,15 @@ handle_call({restore, EmailOrUid}, _From, #state{storage_module = StorageModule}
             {reply, {error, account_not_found}, State}
     end;
 
-handle_call({get_history, EmailOrUid}, _From, State) ->
+handle_call({add_history, EmailOrUid, Event, Source}, _From, State) ->
+    case add_history(EmailOrUid, Event, Source, State) of
+        {ok, history_added} ->
+            {reply, {ok, history_added}, State};
+        not_found ->
+            {reply, {error, account_not_found}, State}
+    end;
+
+handle_call({read_history, EmailOrUid}, _From, State) ->
     case get_history(EmailOrUid, State) of
         {ok, History} ->
             {reply, {ok, History}, State};
@@ -365,16 +378,6 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, _State) ->
     ok.
 
-%% @doc Implementation taken from https://github.com/afiskon/erlang-uuid-v4/blob/master/src/uuid.erl
-make_uid() ->
-    <<A:32, B:16, C:16, D:16, E:48>> = crypto:strong_rand_bytes(16),
-    Str = io_lib:format("~8.16.0b-~4.16.0b-4~3.16.0b-~4.16.0b-~12.16.0b", 
-                        [A, B, C band 16#0fff, D band 16#3fff bor 16#8000, E]),
-    list_to_binary(Str).
-
-get_rfc3339_time() ->
-    list_to_binary(calendar:system_time_to_rfc3339(os:system_time(second))).
-
 create_account(Email, Password, Extra, #state{
         crypto_module = CryptoModule,
         crypto_state = CryptoState,
@@ -382,33 +385,13 @@ create_account(Email, Password, Extra, #state{
         storage_state = StorageState}) ->
     {ok, PasswordHash} = CryptoModule:hash_password(Password, CryptoState),
     Uid = make_uid(),
-    %% In practive the probability of an UID already existing is almost none.
-    not_found = StorageModule:get_by_uid(Uid, StorageState),
-    History = #{
-        uid => Uid,
-        actions => [
-            #{event => created, time => get_rfc3339_time}
-        ]},
-    {ok, saved} = StorageModule:save_history(History, StorageState),
-    Account = #{
-        uid => Uid,
-        email => Email,
-        password_hash => PasswordHash,
-        avatars => [],
-        friends => [],
-        extra => Extra,
-        created_at => get_rfc3339_time()
-    },
-    {ok, saved} = StorageModule:save(Account, StorageState),
+    %% In practive the probability of an UID already existing is almost zero.
+    not_found = StorageModule:read_by_uid(Uid, StorageState),
+    History = make_history(Uid),
+    {ok, created} = StorageModule:create_history(History, StorageState),
+    Account = make_account(Uid, Email, PasswordHash, Extra),
+    {ok, created} = StorageModule:create(Account, StorageState),
     {ok, Account}.
-
-create_action(Uid, Event) ->
-    #{
-        uid => Uid,
-        event => Event,
-        occured_at => get_rfc3339_time(),
-        status => unconfirmed
-    }.
 
 get_account(EmailOrUid, State) ->
     case read_account_from_storage(EmailOrUid, State) of
@@ -427,32 +410,77 @@ get_account(EmailOrUid, include_logically_deleted, State) ->
 read_account_from_storage(EmailOrUid, #state{storage_module = StorageModule, storage_state = StorageState}) ->
     case EmailOrUid of
         {email, Email} ->
-            case StorageModule:get_by_email(Email, StorageState) of
+            case StorageModule:read_by_email(Email, StorageState) of
                 {ok, Account} -> {ok, Account};
                 not_found -> not_found
             end;
         {uid, Uid} ->
-            case StorageModule:get_by_uid(Uid, StorageState) of
+            case StorageModule:read_by_uid(Uid, StorageState) of
                 {ok, Account} -> {ok, Account};
                 not_found -> not_found
             end
     end.
 
+add_history(EmailOrUid, Event, Source, #state{storage_module = StorageModule, storage_state = StorageState} = State) ->
+    HistoryEvent = make_history_event(Event, Source),
+    case get_history(EmailOrUid, State) of
+        {ok, #{events := Events} = History} ->
+            UpdatedHistory = History#{events => lists:append([HistoryEvent], Events)},
+            {ok, updated} = StorageModule:update_history(UpdatedHistory, StorageState),
+            {ok, history_added};
+        not_found ->
+            not_found
+    end.
+
 get_history(EmailOrUid, #state{storage_module = StorageModule, storage_state = StorageState}) ->
     case EmailOrUid of
         {email, Email} ->
-            case StorageModule:get_by_email(Email, StorageState) of
+            case StorageModule:read_by_email(Email, StorageState) of
                 {ok, #{uid := Uid}} ->
-                    StorageModule:get_history(Uid);
+                    StorageModule:read_history(Uid, StorageState);
                 not_found ->
                     not_found
             end;
         {uid, Uid} ->
-            StorageModule:get_history(Uid, StorageState)
+            StorageModule:read_history(Uid, StorageState)
     end.
 
 email_exists(Email, #state{storage_module = StorageModule} = State) ->
-    case StorageModule:get_by_email(Email, State#state.storage_state) of
+    case StorageModule:read_by_email(Email, State#state.storage_state) of
         {ok, _Account} -> true;
         not_found -> false
     end.
+
+%% @doc Implementation taken from https://github.com/afiskon/erlang-uuid-v4/blob/master/src/uuid.erl
+make_uid() ->
+    <<A:32, B:16, C:16, D:16, E:48>> = crypto:strong_rand_bytes(16),
+    Str = io_lib:format("~8.16.0b-~4.16.0b-4~3.16.0b-~4.16.0b-~12.16.0b", 
+                        [A, B, C band 16#0fff, D band 16#3fff bor 16#8000, E]),
+    list_to_binary(Str).
+
+make_account(Uid, Email, PasswordHash, Extra) ->
+    #{
+        uid => Uid,
+        email => Email,
+        password_hash => PasswordHash,
+        avatars => [],
+        friends => [],
+        extra => Extra,
+        created_at => get_rfc3339_time()
+    }.
+
+make_history(Uid) ->
+    #{
+        uid => Uid,
+        events => [make_history_event(account_created, system)]
+    }.
+
+make_history_event(Event, Source) ->
+    #{
+        event => Event,
+        source => Source,
+        occured_at => get_rfc3339_time()
+    }.
+
+get_rfc3339_time() ->
+    list_to_binary(calendar:system_time_to_rfc3339(os:system_time(second))).

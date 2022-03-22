@@ -8,15 +8,19 @@
 
 -type riak_state() :: #riak_state{}.
 
+-define(PUT_ARGS, [{w, 1}, {dw, 1}]).
+
 -export([
     init/0,
     stop/1,
-    save/2,
-    get_by_email/2,
-    get_by_uid/2,
+    create/2,
+    update/2,
+    read_by_email/2,
+    read_by_uid/2,
     delete/2,
-    save_history/2,
-    get_history/2]).
+    create_history/2,
+    update_history/2,
+    read_history/2]).
 
 -spec init() -> {ok, RiakState :: riak_state()}.
 init() ->
@@ -33,33 +37,57 @@ init() ->
 stop(#riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:stop(Pid).
 
--spec save(Account :: map(), RiakState :: riak_state()) -> {ok, saved}.    
-save(#{uid := Uid, email := Email} = Account, #riak_state{riak_client_pid = Pid}) ->
+-spec create(Account :: map(), RiakState :: riak_state()) -> {ok, created}.    
+create(#{uid := Uid, email := undefined} = Account, #riak_state{riak_client_pid = Pid}) ->
     AccountObject = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(Account)),
-    AccountObjectMetaData = riakc_obj:get_update_metadata(AccountObject),
-    AccountObjectMetaData2 = riakc_obj:set_secondary_index(AccountObjectMetaData, [{{binary_index, "email"}, [Email]}]),
-    AccountObjectWithIndex = riakc_obj:update_metadata(AccountObject, AccountObjectMetaData2),
-    riakc_pb_socket:put(Pid, AccountObjectWithIndex, [{w, 1}, {dw, 1}, return_body]),
-    {ok, saved}.
+    riakc_pb_socket:put(Pid, AccountObject, ?PUT_ARGS),
+    {ok, created};
 
--spec get_by_uid(Uid :: binary, RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
-get_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
+create(#{uid := Uid, email := Email} = Account, #riak_state{riak_client_pid = Pid}) ->
+    AccountObject = riakc_obj:new(?ACCOUNTS_TABLE, Uid, term_to_binary(Account)),
+    AccountObjectWithEmailIndex = set_metadata_email_index(AccountObject, Email),
+    riakc_pb_socket:put(Pid, AccountObjectWithEmailIndex, ?PUT_ARGS),
+    {ok, created}.
+
+-spec update(Account :: map(), RiakState :: riak_state()) -> {ok, updated} | not_found.
+update(#{uid := Uid, email := Email} = Account, #riak_state{riak_client_pid = Pid}) ->
     case riakc_pb_socket:get(Pid, ?ACCOUNTS_TABLE, Uid) of
-        {error, notfound}->
+        {error, notfound} ->
             not_found;
-        {ok, Object} ->
-            {ok, binary_to_term(riakc_obj:get_value(Object))}    
+        {ok, AccountObject} ->
+            ExistingAccount = binary_to_term(riakc_obj:get_value(AccountObject)),
+            case has_same_email(Account, ExistingAccount) of
+                true ->
+                    UpdatedAccountObject = riakc_obj:update_value(AccountObject, term_to_binary(Account)),
+                    ok = riakc_pb_socket:put(Pid, UpdatedAccountObject, ?PUT_ARGS),
+                    {ok, updated};
+                false ->
+                    UpdatedAccountObject = riakc_obj:update_value(AccountObject, term_to_binary(Account)),
+                    UpdatedAccountObjectWithEmailIndex = set_metadata_email_index(UpdatedAccountObject, Email),
+                    error_logger:info_report({?MODULE, updated_secondary_index, Email}),
+                    ok = riakc_pb_socket:put(Pid, UpdatedAccountObjectWithEmailIndex, ?PUT_ARGS),
+                    {ok, updated}
+            end
     end.
 
--spec get_by_email(Email :: binary, RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
-get_by_email(Email, #riak_state{riak_client_pid = Pid} = RiakState) ->
+-spec read_by_uid(Uid :: binary(), RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
+read_by_uid(Uid, #riak_state{riak_client_pid = Pid}) ->
+    case riakc_pb_socket:get(Pid, ?ACCOUNTS_TABLE, Uid) of
+        {error, notfound} ->
+            not_found;
+        {ok, AccountObject} ->
+            {ok, binary_to_term(riakc_obj:get_value(AccountObject))}    
+    end.
+
+-spec read_by_email(Email :: binary, RiakState :: riak_state()) -> {ok, Account :: map()} | not_found.
+read_by_email(Email, #riak_state{riak_client_pid = Pid} = RiakState) ->
     case riakc_pb_socket:get_index(Pid, ?ACCOUNTS_TABLE, {binary_index, "email"}, Email) of
         {error, notfound} ->
             not_found;
         {ok, {index_results_v1, [], _, _}} ->
             not_found;
         {ok, {index_results_v1, [Uid], _, _}} ->
-            get_by_uid(Uid, RiakState)
+            read_by_uid(Uid, RiakState)
     end.
 
 -spec delete(Email :: binary, RiakState :: riak_state()) -> {ok, deleted} | not_found.
@@ -67,15 +95,35 @@ delete(Uid, #riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:delete(Pid, ?ACCOUNTS_TABLE, Uid),
     {ok, deleted}.
 
-save_history(#{uid := Uid} = History, #riak_state{riak_client_pid = Pid}) -> 
+-spec create_history(Uid :: binary, RiakState :: riak_state()) -> {ok, created}.
+create_history(#{uid := Uid} = History, #riak_state{riak_client_pid = Pid}) -> 
     HistoryObject = riakc_obj:new(?ACCOUNTS_HISTORY_TABLE, Uid, term_to_binary(History)),
-    riakc_pb_socket:put(Pid, HistoryObject, [{w, 1}, {dw, 1}, return_body]),
-    {ok, saved}.
+    riakc_pb_socket:put(Pid, HistoryObject, ?PUT_ARGS),
+    {ok, created}.
 
-get_history(Uid, #riak_state{riak_client_pid = Pid}) ->
+read_history(Uid, #riak_state{riak_client_pid = Pid}) ->
     case riakc_pb_socket:get(Pid, ?ACCOUNTS_HISTORY_TABLE, Uid) of
         {error, notfound} ->
             not_found;
         {ok, Object} ->
             {ok, binary_to_term(riakc_obj:get_value(Object))}
     end.
+
+-spec update_history(History :: map(), RiakState :: riak_state()) -> {ok, updated} | not_found.
+update_history(#{uid := Uid} = History, #riak_state{riak_client_pid = Pid}) ->
+    case riakc_pb_socket:get(Pid, ?ACCOUNTS_HISTORY_TABLE, Uid) of
+        {error, notfound} ->
+            not_found;
+        {ok, HistoryObject} ->
+            UpdatedHistoryObject = riakc_obj:update_value(HistoryObject, term_to_binary(History)),
+            ok = riakc_pb_socket:put(Pid, UpdatedHistoryObject, ?PUT_ARGS),
+            {ok, updated}
+    end.
+
+set_metadata_email_index(AccountObject, Email) ->
+    AccountObjectMetaData = riakc_obj:get_update_metadata(AccountObject),
+    AccountObjectMetaData2 = riakc_obj:set_secondary_index(AccountObjectMetaData, [{{binary_index, "email"}, [Email]}]),
+    riakc_obj:update_metadata(AccountObject, AccountObjectMetaData2).
+
+has_same_email(#{email := Email1}, #{email := Email2}) ->
+    Email1 == Email2.
