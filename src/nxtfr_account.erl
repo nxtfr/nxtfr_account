@@ -102,7 +102,7 @@ init([]) ->
     {ok, StorageModule} = application:get_env(nxtfr_account, storage_module),
     {ok, CryptoModule} = application:get_env(nxtfr_account, crypto_module),
     {ok, AutoDiscoveryGroup} = application:get_env(nxtfr_account, autodiscovery_group),
-    nxtfr_event:notify({join_autodiscovery_group, AutoDiscoveryGroup}),
+    nxtfr_autodiscovery:join_group(AutoDiscoveryGroup),
     {ok, StorageState} = StorageModule:init(),
     {ok, CryptoState} = CryptoModule:init(),
     {ok, #state{
@@ -329,13 +329,13 @@ get_rfc3339_time() ->
 
 create_account(Email, Password, Extra, #state{crypto_module = CryptoModule, storage_module = StorageModule} = State) ->
     {ok, PasswordHash} = CryptoModule:hash_password(Password, State#state.crypto_state),
-    Account = #account{
-        uid = make_uid(),
-        email = Email,
-        password_hash = PasswordHash,
-        characters = [],
-        extra = Extra,
-        created_at = get_rfc3339_time()
+    Account = #{
+        uid => make_uid(),
+        email => Email,
+        password_hash => PasswordHash,
+        characters => [],
+        extra => Extra,
+        created_at => get_rfc3339_time()
     },
     {ok, saved} = StorageModule:save(Account, State#state.storage_state),
     {ok, Account}.
