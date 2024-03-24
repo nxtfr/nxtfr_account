@@ -10,7 +10,7 @@
 -export([start/0, start/2, stop/1]).
 
 start() ->
-    application:start(nxtfr_account_app).
+    application:start(nxtfr_account).
 
 start(_StartType, _StartArgs) ->
     nxtfr_account_sup:start_link().

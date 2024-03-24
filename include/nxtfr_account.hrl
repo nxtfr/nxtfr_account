@@ -1,1 +1,0 @@
--record(account, {uid, email, password_hash, characters, extra, created_at, updated_at, deleted = false}).

@@ -18,7 +18,7 @@ start_link() ->
 
 init([]) ->
     SupFlags = #{strategy => one_for_all,
-                 intensity => 0,
+                 intensity => 10,
                  period => 1},
     NxtfrAccount = #{
         id => nxtfr_account,
@@ -26,5 +26,3 @@ init([]) ->
         type => worker},
     ChildSpecs = [NxtfrAccount],
     {ok, {SupFlags, ChildSpecs}}.
-
-%% internal functions
