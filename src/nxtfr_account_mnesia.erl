@@ -7,28 +7,29 @@
 
 -export([
     init/0,
-    save/2,
-    get_by_email/2,
-    get_by_uid/2,
+    stop/1,
+    create/2,
+    update/2,
+    read_by_email/2,
+    read_by_uid/2,
     delete/2,
-    logical_delete/2,
-    save_history/2,
-    get_history/2
-    ]).
+    create_history/2,
+    update_history/2,
+    read_history/2]).
 
 -record(account, {
     uid :: binary(),
     email :: binary(),
-    map :: map(),
-    deleted :: true | false}).
+    map :: map()}).
 
 -record(account_history, {
     uid :: binary(),
     map :: map()}).
 
 init() ->
-    mnesia:create_schema([node()]),
     mnesia:start(),
+    mnesia:create_schema([node()]),
+    mnesia:change_table_copy_type(schema, node(), disc_copies),
     case lists:member(?ACCOUNTS_TABLE, mnesia:system_info(tables)) of
         true ->
             pass;
@@ -36,63 +37,96 @@ init() ->
             mnesia:create_table(?ACCOUNTS_TABLE, [
                 {record_name, account},
                 {attributes, record_info(fields, account)},
-                {index, [email, deleted]},
-                {disc_copies, [node()]}]),
-            mnesia:start()
+                {index, [email]},
+                {disc_only_copies, [node()]}])
+    end,
+    case lists:member(?ACCOUNTS_HISTORY_TABLE, mnesia:system_info(tables)) of
+        true ->
+            pass;
+        false ->
+            mnesia:create_table(?ACCOUNTS_HISTORY_TABLE, [
+                {record_name, account_history},
+                {attributes, record_info(fields, account_history)},
+                {disc_only_copies, [node()]}])
     end,
     {ok, []}.
 
--spec save(AccountMap :: map(), MnesiaState :: []) -> {ok, saved} | {error, Reason :: any()}.
-save(#{uid := Uid, email := Email, deleted := Deleted} = AccountMap, _MnesiaState) ->
-    Record = #account{uid = Uid, email = Email, map = AccountMap, deleted = Deleted},
+-spec stop(MnesiaState :: []) -> ok.
+stop(_MnesiaState) ->
+    ok.
+
+-spec create(AccountMap :: map(), MnesiaState :: []) -> {ok, created} | {error, Reason :: any()}.
+create(#{uid := Uid, email := Email} = AccountMap, _MnesiaState) ->
+    Record = #account{uid = Uid, email = Email, map = AccountMap},
     case write(?ACCOUNTS_TABLE, Record) of
         {atomic, ok} ->
-            {ok, saved};
+            {ok, created};
         {aborted, Reason} ->
             {error, Reason}
     end.
 
-get_by_email(Email, _MnesiaState) ->
-    case mnesia:dirty_index_read(?ACCOUNTS_TABLE, Email, #account.email) of
-        [] -> not_found;
-        [Account] -> {ok, Account#account.map}
+-spec update(Account :: map(), MnesiaState :: []) -> {ok, updated} | not_found.
+update(#{uid := Uid} = Account, _MnesiaState) ->
+    case read({?ACCOUNTS_TABLE, Uid}) of 
+        {atomic, [#account{uid = Uid} = Record]} ->
+            case write(?ACCOUNTS_TABLE, Record#account{map = Account}) of
+                {atomic, ok} ->
+                    {ok, updated};
+                {aborted, Reason} ->
+                    {error, Reason}
+            end;
+        {atomic, []} ->
+            not_found
     end.
 
-get_by_uid(Uid, _MnesiaState) ->
+-spec read_by_uid(Uid :: binary(), MnesiaState :: []) -> {ok, Account :: map()} | not_found.
+read_by_uid(Uid, _MnesiaState) ->
     case read({?ACCOUNTS_TABLE, Uid}) of 
         {atomic, [Account]} -> {ok, Account#account.map};
         {atomic, []} -> not_found
     end.
 
+-spec read_by_email(Email :: binary, MnesiaState :: []) -> {ok, Account :: map()} | not_found.
+read_by_email(Email, _MnesiaState) ->
+    case mnesia:dirty_index_read(?ACCOUNTS_TABLE, Email, #account.email) of
+        [] -> not_found;
+        [Account] -> {ok, Account#account.map}
+    end.
+
+-spec delete(Email :: binary, MnesiaState :: []) -> {ok, deleted} | not_found.
 delete(Uid, _MnesiaState) ->
     case delete({?ACCOUNTS_TABLE, Uid}) of 
         {atomic, ok} -> {ok, deleted};
         {aborted, Reason} -> {error, Reason}
     end.
 
-logical_delete(Uid, MnesiaState) ->
-    case read({?ACCOUNTS_TABLE, Uid}) of 
-        {atomic, [#account{map = AccountMap}]} ->
-            DeletedAccountMap = AccountMap#{deleted => true}, 
-            {ok, saved} = save(DeletedAccountMap, MnesiaState),
-            {ok, deleted};
-        {atomic, []} -> 
-            not_found
-    end.
-
--spec save_history(HistoryMap :: map(), MnesiaState :: []) -> {ok, saved} | {error, Reason :: any()}.
-save_history(#{uid := Uid} = HistoryMap, _MnesiaState) ->
-    Record = #account_history{uid = Uid, map = HistoryMap},
+-spec create_history(Uid :: binary, MnesiaState :: []) -> {ok, created} | {error, Reason :: any()}.
+create_history(#{uid := Uid} = History, _MnesiaState) -> 
+    Record = #account_history{uid = Uid, map = History},
     case write(?ACCOUNTS_HISTORY_TABLE, Record) of
         {atomic, ok} ->
-            {ok, saved};
+            {ok, created};
         {aborted, Reason} ->
             {error, Reason}
     end.
 
-get_history(Uid, _MnesiaState) ->
+-spec read_history(Uid :: binary, MnesiaState :: []) -> {ok, History :: map() | not_found}.
+read_history(Uid, _MnesiaState) ->
     case read({?ACCOUNTS_HISTORY_TABLE, Uid}) of 
         {atomic, [History]} -> {ok, History#account_history.map};
+        {atomic, []} -> not_found
+    end.
+
+-spec update_history(History :: map(), MnesiaState :: []) -> {ok, updated} | {error, Reason :: any()} | not_found.
+update_history(#{uid := Uid} = History, _MnesiaState) ->
+    case read({?ACCOUNTS_HISTORY_TABLE, Uid}) of 
+        {atomic, [#account_history{uid = Uid} = Record]} ->
+            case write(?ACCOUNTS_HISTORY_TABLE, Record#account_history{map = History}) of
+                {atomic, ok} ->
+                    {ok, updated};
+                {aborted, Reason} ->
+                    {error, Reason}
+            end;
         {atomic, []} -> not_found
     end.
 

@@ -101,6 +101,7 @@ create_history(#{uid := Uid} = History, #riak_state{riak_client_pid = Pid}) ->
     riakc_pb_socket:put(Pid, HistoryObject, ?PUT_ARGS),
     {ok, created}.
 
+-spec read_history(Uid :: binary, RiakState :: riak_state()) -> {ok, History :: map() | not_found}.
 read_history(Uid, #riak_state{riak_client_pid = Pid}) ->
     case riakc_pb_socket:get(Pid, ?ACCOUNTS_HISTORY_TABLE, Uid) of
         {error, notfound} ->
